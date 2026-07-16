@@ -1,6 +1,11 @@
 cc_library_shared {
     name: "libsdmdal",
     defaults: ["qtidisplay_defaults"],
+    header_libs: [
+        "display_core_headers",
+        "libdrmutils_local_headers_nx809j",
+        "nx809j_qti_display_uapi",
+    ], // NX809J: utils/formats.h + drm_lib_loader.h
     sanitize: {
         integer_overflow: true,
     },

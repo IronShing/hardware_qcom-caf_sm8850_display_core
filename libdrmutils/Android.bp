@@ -31,3 +31,10 @@ cc_library_shared {
     ],
 
 }
+
+// NX809J: sm8850 source dropped the header export; re-add so libsdmdal etc. find drm_lib_loader.h
+cc_library_headers {
+    name: "libdrmutils_local_headers_nx809j",
+    vendor: true,
+    export_include_dirs: ["."],
+}
