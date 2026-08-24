@@ -15,6 +15,8 @@ DisplayError DPUCoreFactory::Create(
     sdm::MultiCoreInstance<uint32_t, HWInfoInterface *> hw_info_intf,
     BufferAllocator *buffer_allocator, DPUCoreMux **dpu_core_mux) {
   DPUCoreMux *dpu_core = nullptr;
+  DLOGE("NX809J-RE: DPUCoreFactory disp_type=%d hw_info_intf.Size()=%d -> %s", type,
+        hw_info_intf.Size(), (hw_info_intf.Size() == 1) ? "SingleCore" : "MultiCore");
   if (hw_info_intf.Size() == 1) {
     dpu_core = new DPUSingleCore(display_id, type, hw_info_intf, buffer_allocator);
   } else {

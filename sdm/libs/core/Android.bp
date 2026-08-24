@@ -1,8 +1,26 @@
 cc_library_shared {
     name: "libsdmcore",
     defaults: ["qtidisplay_defaults"],
+    // NX809J: the ZTE libsdmextension reports display modes with fps holding the
+    // period-ns (e.g. 16666666), which overflows an integer multiply in
+    // DispLayerStack::Clear() during PostCommit. The stock libsdmcore ships
+    // WITHOUT abort-on-overflow UBSan and simply wraps this (harmless post-commit
+    // stat). Match stock: disable the abort so the source SDM tolerates the ext's
+    // values instead of SIGABRT-looping the composer.
     sanitize: {
-        integer_overflow: true,
+        integer_overflow: false,
+        // NX809J: the stock libsdmcore ships WITHOUT MTE / heap-tagging. The
+        // Android-16 source build enables it, and the ZTE libsdmextension's data
+        // trips MTE "pointer tag truncated" + Scudo aborts in the commit path
+        // where stock silently tolerates it. Match stock: turn the heap memory
+        // tagging off for this lib so it doesn't abort on the ext's accesses.
+        memtag_heap: false,
+        memtag_stack: false,
+        hwaddress: false,
+        misc_undefined: [],
+        diag: {
+            integer_overflow: false,
+        },
     },
     vendor: true,
     header_libs: [

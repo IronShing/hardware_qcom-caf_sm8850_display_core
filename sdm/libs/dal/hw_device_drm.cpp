@@ -998,9 +998,19 @@ DisplayError HWDeviceDRM::PopulateDisplayAttributes(uint32_t index) {
 
   display_attributes_[index].x_pixels = mode.hdisplay;
   display_attributes_[index].y_pixels = mode.vdisplay;
-  display_attributes_[index].fps = mode.vrefresh;
-  display_attributes_[index].vsync_period_ns =
-    UINT32(1000000000L / display_attributes_[index].fps);
+  // NX809J: the ZTE panel's DRM driver reports mode.vrefresh as the vsync PERIOD
+  // in ns (e.g. 16666666 = 60Hz) instead of the refresh rate in Hz. A period-sized
+  // "fps" overflows integer multiplies downstream (DispLayerStack::Clear) and
+  // corrupts the heap. A real refresh rate is < ~1000 Hz; anything larger is a
+  // period in ns — normalize it here so all downstream fps math is correct.
+  if (mode.vrefresh > 1000) {
+    display_attributes_[index].vsync_period_ns = mode.vrefresh;
+    display_attributes_[index].fps = UINT32(1000000000L / mode.vrefresh);
+  } else {
+    display_attributes_[index].fps = mode.vrefresh;
+    display_attributes_[index].vsync_period_ns =
+      UINT32(1000000000L / display_attributes_[index].fps);
+  }
   display_attributes_[index].fsc_panel = connector_info_.fsc_panel;
   display_attributes_[index].num_fsc_fields = connector_info_.num_fsc_fields;
 
@@ -1173,11 +1183,19 @@ void HWDeviceDRM::PopulateHWPanelInfo() {
         }
       }
     }
-    hw_panel_info_.min_fps = min_fps;
-    hw_panel_info_.max_fps = max_fps;
+    // NX809J: vrefresh holds period-ns; min period => max fps, and vice versa.
+    if (min_fps > 1000) {
+      hw_panel_info_.min_fps = UINT32(1000000000L / max_fps);
+      hw_panel_info_.max_fps = UINT32(1000000000L / min_fps);
+    } else {
+      hw_panel_info_.min_fps = min_fps;
+      hw_panel_info_.max_fps = max_fps;
+    }
   } else {
-    hw_panel_info_.min_fps = current_mode.vrefresh;
-    hw_panel_info_.max_fps = current_mode.vrefresh;
+    uint32_t vr = current_mode.vrefresh;
+    uint32_t f = (vr > 1000) ? UINT32(1000000000L / vr) : vr;
+    hw_panel_info_.min_fps = f;
+    hw_panel_info_.max_fps = f;
   }
 
   uint32_t transfer_time_us_min = hw_panel_info_.transfer_time_us;
@@ -1754,6 +1772,10 @@ void HWDeviceDRM::SetupAtomic(Fence::ScopedRef &scoped_ref, HWLayersInfo *hw_lay
 
   DTRACE_SCOPED();
   uint32_t hw_layer_count = UINT32(hw_layers_info->hw_layers.size());
+  DLOGE("NX809J-RE: SetupAtomic hw_layer_count=%u hw_layers.size=%zu index.size=%zu "
+        "roi_index.size=%zu left_frame_roi=%zu", hw_layer_count,
+        hw_layers_info->hw_layers.size(), hw_layers_info->index.size(),
+        hw_layers_info->roi_index.size(), hw_layers_info->left_frame_roi.size());
   HWQosData &qos_data = hw_layers_info->qos_data;
   DRMSecurityLevel crtc_security_level = DRMSecurityLevel::SECURE_NON_SECURE;
   uint32_t index = current_mode_index_;

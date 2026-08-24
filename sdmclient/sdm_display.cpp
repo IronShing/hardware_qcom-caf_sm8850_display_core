@@ -1702,6 +1702,22 @@ DisplayError SDMDisplay::HandlePrepareError(DisplayError error) {
     WaitOnPreviousFence();
     MarkLayersForGPUBypass();
     geometry_changes_on_doze_suspend_ |= geometry_changes_;
+  } else if (error == kErrorNotSupported) {
+    // NX809J: with the closed libsdmextension bypassed, SDM's source GPU-fallback
+    // strategy (Strategy::GetNextStrategy) returns kErrorNotSupported until SF has
+    // provided a client-target buffer. Bootstrap the handshake: mark every app layer
+    // for CLIENT (GPU) composition and report success so SF composites them into the
+    // client target and provides it. Next Validate then has gpu_target_index set and
+    // the GPU-fallback produces a single FB-target layer -> ResourceDefault (<=2 pipes)
+    // -> commit lands -> panel lights. Reverts to normal once the target exists.
+    WaitOnPreviousFence();
+    for (auto sdm_layer : sdm_layer_stack_->layer_set_) {
+      Layer *layer = sdm_layer->GetSDMLayer();
+      if (layer->composition != kCompositionGPUTarget) {
+        layer->composition = kCompositionGPU;
+      }
+    }
+    has_client_composition_ = true;
   } else {
     DLOGW("Prepare failed. Error = %d", error);
     // Prepare cycle can fail on a newly connected display if insufficient pipes

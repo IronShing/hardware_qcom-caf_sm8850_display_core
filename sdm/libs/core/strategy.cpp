@@ -103,6 +103,9 @@ DisplayError Strategy::Start(DispLayerStack *disp_layer_stack, uint32_t *max_att
   disp_layer_stack_ = disp_layer_stack;
   extn_start_success_ = false;
 
+  DLOGE("NX809J-RE: Strategy::Start called, strategy_intf_=%p max_attempts_in=%u",
+        strategy_intf_, *max_attempts);
+
   if (strategy_intf_) {
     error = strategy_intf_->Start(disp_layer_stack_, max_attempts, constraints);
     if (error == kErrorNone || error == kErrorNeedsValidate ||
@@ -113,6 +116,16 @@ DisplayError Strategy::Start(DispLayerStack *disp_layer_stack, uint32_t *max_att
       *max_attempts = 1;
       error = kErrorNeedsValidate;
     }
+  } else {
+    // NX809J: no extension strategy (bypassed). Two things must happen:
+    // (1) grant one attempt so CompManager's GetNextStrategy loop runs the source
+    //     GPU-fallback (max_attempts stayed 0 otherwise -> "strategies exhausted").
+    // (2) return kErrorNeedsValidate (NOT kErrorNone): DisplayBuiltIn::Prepare
+    //     returns early on kErrorNone from PrePrepare, skipping the real
+    //     comp_manager_->Prepare/GetNextStrategy composition. NeedsValidate forces
+    //     the full Prepare path -- mirrors the ext's own "start failed" branch above.
+    *max_attempts = 1;
+    error = kErrorNeedsValidate;
   }
 
   disp_layer_stack_->stack->flags.default_strategy = !extn_start_success_;
@@ -128,6 +141,9 @@ DisplayError Strategy::Stop() {
 }
 
 DisplayError Strategy::GetNextStrategy() {
+  DLOGE("NX809J-RE: GetNextStrategy disable_gpu_comp_=%d gpu_target_index=%d extn_start=%d "
+        "app_layer_count=%u", disable_gpu_comp_, disp_layer_stack_->stack_info.gpu_target_index,
+        extn_start_success_, disp_layer_stack_->stack_info.app_layer_count);
   if (!disable_gpu_comp_ && !disp_layer_stack_->stack_info.gpu_target_index) {
     DLOGE("GPU composition is enabled and GPU target buffer not provided for display %d-%d.",
           display_id_, display_type_);
@@ -230,6 +246,11 @@ void Strategy::GenerateROI() {
   disp_layer_stack_->stack_info.left_frame_roi = {};
   disp_layer_stack_->stack_info.right_frame_roi = {};
 
+  DLOGE("NX809J-RE: GenerateROI is_src_split=%d is_device_split=%d split_display=%d "
+        "mixer.width=%.0f split_left=%u", is_src_split,
+        info_ctx_.display_attributes.is_device_split, split_display, layer_mixer_width,
+        info_ctx_.mixer_attributes.split_left);
+
   if (split_display) {
     float left_split = FLOAT(info_ctx_.mixer_attributes.split_left);
     disp_layer_stack_->stack_info.left_frame_roi.push_back(LayerRect(0.0f, 0.0f,
@@ -240,6 +261,17 @@ void Strategy::GenerateROI() {
     disp_layer_stack_->stack_info.left_frame_roi.push_back(LayerRect(0.0f, 0.0f,
                                 layer_mixer_width, layer_mixer_height));
     disp_layer_stack_->stack_info.right_frame_roi.push_back(LayerRect(0.0f, 0.0f, 0.0f, 0.0f));
+  }
+
+  // NX809J: with the extension bypassed, nothing copies the frame ROI into the
+  // per-core HWLayersInfo -- the ext's partial-update/resource normally does. SetupAtomic
+  // (hw_device_drm.cpp) and the per-core ROI checks (display_builtin.cpp) read
+  // info.left_frame_roi per core; if left empty the DRM setup mis-indexes and aborts
+  // (out_of_range). Mirror stack_info ROI into every per-core info. Single-core here
+  // (DPUSingleCore); when an ext is present its resource Prepare overwrites these.
+  for (auto &info : disp_layer_stack_->info) {
+    info.second.left_frame_roi = disp_layer_stack_->stack_info.left_frame_roi;
+    info.second.right_frame_roi = disp_layer_stack_->stack_info.right_frame_roi;
   }
 }
 
@@ -303,6 +335,8 @@ DisplayError Strategy::Purge() {
 void Strategy::ResetStrategy(uint32_t *max_attempts) {
   if (strategy_intf_) {
     strategy_intf_->ResetStrategy(max_attempts);
+  } else {
+    *max_attempts = 1;  // NX809J: source GPU-fallback gets one attempt (see Start)
   }
 }
 

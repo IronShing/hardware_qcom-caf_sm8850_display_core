@@ -53,12 +53,38 @@ DisplayError CompManager::Init(const std::vector<HWResourceInfo> &hw_res_info,
 
   DisplayError error = kErrorNone;
 
-  if (extension_intf) {
+  if (!hw_res_info.empty()) {
+    DLOGE("NX809J-RE: CompManager hw_res_info[0] max_pipe_width=%u max_scaler_pipe_width=%u "
+          "max_mixer_width=%u is_src_split=%d num_blending_stages=%u",
+          hw_res_info[0].max_pipe_width, hw_res_info[0].max_scaler_pipe_width,
+          hw_res_info[0].max_mixer_width, hw_res_info[0].is_src_split,
+          hw_res_info[0].num_blending_stages);
+    // Raw uint32 dump of first 192 bytes: find which offset holds a value in (304,405]
+    // = the offset the ZTE prebuilt libsdmextension reads for max_pipe_width.
+    const uint32_t *raw = reinterpret_cast<const uint32_t *>(&hw_res_info[0]);
+    for (uint32_t off = 0; off < 680; off += 4) {
+      uint32_t v = raw[off / 4];
+      if (v > 300 && v < 420)
+        DLOGE("NX809J-RE: u32 off=%3u val=%u (0x%x)  <== candidate", off, v, v);
+    }
+    const uint16_t *raw16 = reinterpret_cast<const uint16_t *>(&hw_res_info[0]);
+    for (uint32_t off = 0; off < 680; off += 2) {
+      uint16_t v = raw16[off / 2];
+      if (v > 300 && v < 420)
+        DLOGE("NX809J-RE: u16 off=%3u val=%u (0x%x)  <== candidate", off, v, v);
+    }
+  }
+  char nx_force_def[16] = {0};
+  Debug::GetProperty("vendor.nx809j.force_res_default", nx_force_def);
+  bool nx_use_default = (nx_force_def[0] == '1');
+  if (extension_intf && !nx_use_default) {
     extension_intf->CreateCwbManagerExtn(this, hw_res_info, &cwb_mgr_intf_);
     error = extension_intf->CreateResourceExtn(hw_res_info, buffer_allocator, &resource_intf_);
     extension_intf->CreateDppsControlExtn(&dpps_ctrl_intf_, socket_handler);
     extension_intf->CreateCapabilitiesExtn(hw_res_info[0], &cap_intf_);
   } else {
+    DLOGE("NX809J-RE: forcing ResourceDefault (extension_intf=%p force=%d)", extension_intf,
+          nx_use_default);
     error = ResourceDefault::CreateResourceDefault(hw_res_info, &resource_intf_);
   }
 
@@ -225,6 +251,16 @@ DisplayError CompManager::CheckEnforceSplit(Handle comp_handle,
   DisplayCompositionContext *display_comp_ctx =
                              reinterpret_cast<DisplayCompositionContext *>(comp_handle);
 
+  // NX809J: the closed libsdmextension enforces a 2-pipe-per-LM split when
+  // refresh_rate > 60 (ResourceAlloc::CheckEnforceSplit compares to 0x3c), yielding
+  // 4 pipes for our 1216-wide dual-LM panel -> kernel rejects ">2 planes @ stage".
+  // A 608-wide pipe trivially sustains 144Hz here, so the enforce-split is unnecessary.
+  // Clamp the reported rate so enforce-split never triggers (gated for A/B).
+  char nx_noenf[16] = {0};
+  Debug::GetProperty("vendor.nx809j.no_enforce_split", nx_noenf);
+  if (nx_noenf[0] == '1' && new_refresh_rate > 60) {
+    new_refresh_rate = 60;
+  }
   error = resource_intf_->Perform(ResourceInterface::kCmdCheckEnforceSplit,
                                   display_comp_ctx->display_resource_ctx, new_refresh_rate);
   return error;
@@ -469,6 +505,8 @@ DisplayError CompManager::Prepare(Handle display_ctx, DispLayerStack *disp_layer
 
   bool exit = false;
   uint32_t &count = display_comp_ctx->remaining_strategies;
+  DLOGE("NX809J-RE: CompManager::Prepare remaining_strategies=%u max_strategies=%u", count,
+        display_comp_ctx->max_strategies);
   for (; !exit && count > 0; count--) {
     error = display_comp_ctx->strategy->GetNextStrategy();
     if (error != kErrorNone) {

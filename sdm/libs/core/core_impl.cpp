@@ -85,10 +85,25 @@ DisplayError CoreImpl::Init() {
       return kErrorUndefined;
     }
 
-    error = create_extension_intf_(EXTENSION_VERSION_TAG, &extension_intf_);
-    if (error != kErrorNone) {
-      DLOGE("Unable to create interface");
-      return error;
+    // NX809J: the stock ZTE prebuilt libsdmextension is ABI-incompatible with our
+    // source composer3-V4 core -- its ResourceImpl over-splits one layer into 4 pipes
+    // (kernel rejects ">2 planes @ stage"), and mixing source ResourceDefault with the
+    // prebuilt StrategyImpl null-derefs. Bypassing extension_intf_ entirely makes SDM
+    // fall back to source ResourceDefault (<=2 pipes) + source GPU-composition strategy
+    // (Strategy::GetNextStrategy, extn_start_success_==false path) -> panel lights with
+    // no closed-blob dependency. The extension_lib_ stays open for the separate SDM-utils
+    // / panel-feature factory Syms. Gated by property so it's easy to A/B.
+    int nx_bypass = 0;
+    Debug::Get()->GetProperty("vendor.nx809j.bypass_ext", &nx_bypass);
+    if (nx_bypass == 1) {
+      DLOGW("NX809J-RE: bypassing extension_intf_ -> source ResourceDefault + GPU strategy");
+      extension_intf_ = nullptr;
+    } else {
+      error = create_extension_intf_(EXTENSION_VERSION_TAG, &extension_intf_);
+      if (error != kErrorNone) {
+        DLOGE("Unable to create interface");
+        return error;
+      }
     }
   } else {
 #ifdef TRUSTED_VM
